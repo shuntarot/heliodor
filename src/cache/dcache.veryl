@@ -2001,28 +2001,7 @@ pub module dcache #(
                 }
             }
 
-            // DCACHE_DATA_1RW: the single muxed byte-write-enable write per bank.
-            // At most one of {plain store-merge, AMO/SC, fill beat, store drain}
-            // fires this cycle, and each targets a one-hot way, so per bank at
-            // most one d1_fire_k is set. The masked write folds the retention read
-            // data_k[d1_idx] into the SRAM byte-enable → 1 write port + no old-line
-            // read (data 8R4W → 7R1W). Byte-identical to the four gated writes:
-            // for the firing bank data_k[d1_idx] IS the old line, and the mask
-            // reproduces wr_dword(old, off, merge_dword(...)) exactly.
-            if DCACHE_DATA_1RW {
-                if d1_fire_0 {
-                    data_0[d1_idx] = (data_0[d1_idx] & ~d1_msk) | (d1_new & d1_msk);
-                }
-                if d1_fire_1 {
-                    data_1[d1_idx] = (data_1[d1_idx] & ~d1_msk) | (d1_new & d1_msk);
-                }
-                if d1_fire_2 {
-                    data_2[d1_idx] = (data_2[d1_idx] & ~d1_msk) | (d1_new & d1_msk);
-                }
-                if d1_fire_3 {
-                    data_3[d1_idx] = (data_3[d1_idx] & ~d1_msk) | (d1_new & d1_msk);
-                }
-            }
+            // DCACHE_DATA_1RW: the data write is in its own block below.
 
             // P9.2: full-line WRITE-THROUGH drain — drop our own (clean S)
             // copy; the home merges the line and invalidates the other
@@ -2263,6 +2242,34 @@ pub module dcache #(
                 }
             }
 
+        }
+    }
+
+    // DCACHE_DATA_1RW: the single muxed byte-write-enable write per bank.
+    // At most one of {plain store-merge, AMO/SC, fill beat, store drain}
+    // fires this cycle, and each targets a one-hot way, so per bank at
+    // most one d1_fire_k is set. The masked write folds the retention read
+    // data_k[d1_idx] into the SRAM byte-enable → 1 write port + no old-line
+    // read (data 8R4W → 7R1W). Byte-identical to the four gated writes:
+    // for the firing bank data_k[d1_idx] IS the old line, and the mask
+    // reproduces wr_dword(old, off, merge_dword(...)) exactly.
+    // This write has its own block with no reset.
+    // Vivado makes RAM only from arrays that no reset block writes.
+    // The data needs no reset: `valid_*` gates every hit.
+    always_ff (clk) {
+        if DCACHE_DATA_1RW {
+            if d1_fire_0 {
+                data_0[d1_idx] = (data_0[d1_idx] & ~d1_msk) | (d1_new & d1_msk);
+            }
+            if d1_fire_1 {
+                data_1[d1_idx] = (data_1[d1_idx] & ~d1_msk) | (d1_new & d1_msk);
+            }
+            if d1_fire_2 {
+                data_2[d1_idx] = (data_2[d1_idx] & ~d1_msk) | (d1_new & d1_msk);
+            }
+            if d1_fire_3 {
+                data_3[d1_idx] = (data_3[d1_idx] & ~d1_msk) | (d1_new & d1_msk);
+            }
         }
     }
 

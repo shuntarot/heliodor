@@ -20,6 +20,7 @@
 // + i_mret_fire pulses.
 pub module csr #(
     param HART_ID: u8 = 0,
+    param VEC_EN : bit = 1, // 0: no vector unit; misa does not show V
 ) (
     clk: input clock,
     rst: input reset,
@@ -514,7 +515,7 @@ pub module csr #(
             // extension (V, bit 21) now that the RVV stack is complete. (F/D/C are
             // detected from the device tree, as the original IMA value reflects;
             // Linux likewise detects V from riscv,isa, not misa.)
-            ADDR_MISA      : rd_data_w = 64'h8000_0000_0034_1181;
+            ADDR_MISA      : rd_data_w = 64'h8000_0000_0014_1181 | ({63'd0, VEC_EN} << 21);
             // S-mode CSRs: sstatus/sie/sip are masked views; others standalone.
             ADDR_SSTATUS   : rd_data_w = (mstatus & SSTATUS_MASK) | SSTATUS_XL_RO | {mstatus_sd, 63'd0};
             ADDR_SIE       : rd_data_w = mie & SI_MASK;

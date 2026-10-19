@@ -1,6 +1,8 @@
 // RV64I instruction decoder
 // Decodes instruction into control signals for pipeline
-pub module decoder (
+pub module decoder #(
+    param VEC_EN: bit = 1, // 0: vector instructions are illegal
+) (
     i_instr     : input  logic                <32>,
     o_alu_op    : output alu_pkg::AluOp           ,
     o_alu_src_a : output decode_pkg::AluSrcA    ,
@@ -1287,14 +1289,18 @@ pub module decoder (
         }
     }
 
+    // No vector unit: a vector instruction is illegal.
+    // It traps like any illegal instruction and writes nothing.
+    let v_off: logic = !VEC_EN && is_vec;
+
     assign o_alu_op      = alu_op;
     assign o_alu_src_a   = alu_src_a;
     assign o_alu_src_b   = alu_src_b;
     assign o_imm_type    = imm_type;
     assign o_wb_sel      = wb_sel;
-    assign o_reg_wen     = reg_wen;
-    assign o_mem_ren     = mem_ren;
-    assign o_mem_wen     = mem_wen;
+    assign o_reg_wen     = reg_wen && !v_off;
+    assign o_mem_ren     = mem_ren && !v_off;
+    assign o_mem_wen     = mem_wen && !v_off;
     assign o_is_branch   = is_branch;
     assign o_is_jal      = is_jal;
     assign o_is_jalr     = is_jalr;
@@ -1305,12 +1311,12 @@ pub module decoder (
     assign o_csr_op      = csr_op;
     assign o_is_csr      = is_csr;
     assign o_csr_imm     = csr_imm;
-    assign o_illegal     = illegal;
+    assign o_illegal     = illegal || v_off;
     assign o_is_amo      = is_amo;
     assign o_amo_funct5  = amo_funct5;
     assign o_is_fp       = is_fp;
-    assign o_fp_reg_wen  = fp_reg_wen;
-    assign o_fp_int_wen  = fp_int_wen;
+    assign o_fp_reg_wen  = fp_reg_wen && !v_off;
+    assign o_fp_int_wen  = fp_int_wen && !v_off;
     assign o_fpu_op      = fpu_op;
     assign o_fp_rm       = fp_rm;
     assign o_fp_rs3_addr = rs3;
@@ -1322,8 +1328,8 @@ pub module decoder (
     assign o_is_cbo_m    = is_cbo_m;
     assign o_hlv         = hlv;
     assign o_hlvx        = hlvx;
-    assign o_is_vec          = is_vec;
+    assign o_is_vec          = is_vec && !v_off;
     assign o_vec_op          = vec_op;
-    assign o_vec_uses_scalar = vec_uses_scalar;
-    assign o_vec_writes_int  = vec_writes_int;
+    assign o_vec_uses_scalar = vec_uses_scalar && !v_off;
+    assign o_vec_writes_int  = vec_writes_int && !v_off;
 }

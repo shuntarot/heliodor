@@ -50,6 +50,14 @@ pub module heliodor_core #(
     // to 1 so the compliance suites (PMPSm cfg_A_tor_zero, ExceptionsSv*) see the
     // hole faults; every other config keeps PMA off and is byte-for-byte unchanged.
     param PMA_FAULT: bit = 0,
+    // Vector unit on (1) or off (0).
+    // With 0, the vector unit, its register file, its FPU and its divider
+    // are removed, and vector instructions trap as illegal.
+    // Use 0 on an FPGA to save area. The default is 1.
+    param VEC_EN: bit = 1,
+    // BTB size as log2(entries). The default 12 is 4096 entries.
+    // FPGA builds use less. Any size works: index and tag come from the full PC.
+    param BTB_IDX_W: u32 = 12,
 ) (
     clk: input clock,
     rst: input reset,
@@ -1173,7 +1181,9 @@ pub module heliodor_core #(
     var ras_arch_pop      : logic    ;
     var ras_arch_push_addr: logic<64>;
 
-    inst u_btb: btb (
+    inst u_btb: btb #(
+        IDX_W: BTB_IDX_W,
+    ) (
         clk                               ,
         rst                               ,
         i_pc           : ic_pc            ,
@@ -1956,12 +1966,12 @@ pub module heliodor_core #(
     // Decode (Stage D)
     // ============================================================
     var dec_op_raw: DecodedOp;
-    inst u_dec: decode ( i_pc: if_pc_q, i_instr: if_instr_q, i_is_rvc: if_is_rvc_q, o_op: dec_op_raw );
+    inst u_dec: decode #( VEC_EN: VEC_EN ) ( i_pc: if_pc_q, i_instr: if_instr_q, i_is_rvc: if_is_rvc_q, o_op: dec_op_raw );
     // Phase 8 S4b: 2nd decode lane — the younger op (head+1) of a 2-wide rename
     // bundle. Dead until rename_fire2 flips on: dec_op2 feeds only rename_fire2-
     // gated slot-1 ports (RAT reads, free_list pop2, ROB alloc2, IQ alloc2).
     var dec_op2_raw: DecodedOp;
-    inst u_dec2: decode ( i_pc: if_pc_q1, i_instr: if_instr_q1, i_is_rvc: if_is_rvc_q1, o_op: dec_op2_raw );
+    inst u_dec2: decode #( VEC_EN: VEC_EN ) ( i_pc: if_pc_q1, i_instr: if_instr_q1, i_is_rvc: if_is_rvc_q1, o_op: dec_op2_raw );
 
     // ── Phase D step C: DECODE_REG DEAD scaffold (D|R — the rename-stage input) ──
     // Register the DECODE output (dec_op / dec_op2) so rename + free-list + IQ/ROB
@@ -3731,127 +3741,174 @@ pub module heliodor_core #(
     // ============================================================
     // Phase 12 V0: Vector unit + vector register file
     // ============================================================
-    inst u_vrf: vrf #(
-        VRF_N: vector_pkg::VRF_N,
-        VRF_W: vector_pkg::VRF_W,
-        VLEN : vector_pkg::VLEN ,
-    ) (
-        clk                    ,
-        rst                    ,
-        i_rd1_addr: vu_vs1_addr,
-        o_rd1_data: vu_vs1_data,
-        i_rd2_addr: vu_vs2_addr,
-        o_rd2_data: vu_vs2_data,
-        i_rd3_addr: vu_mask_addr,
-        o_rd3_data: vu_mask_data,
-        i_rd4_addr: vu_vdold_addr,
-        o_rd4_data: vu_vdold_data,
-        i_wr_en   : vu_vd_wen  ,
-        i_wr_addr : vu_vd_addr ,
-        i_wr_data : vu_vd_data ,
-    );
-    inst u_vu: vector_unit #(
-        VRF_W    : vector_pkg::VRF_W,
-        VLEN     : vector_pkg::VLEN ,
-        PRF_W    : PRF_INT_W        ,
-        ROB_IDX_W: ROB_IDX_W        ,
-        MEM_PIPE : MEM_PIPE         , // CP M2: VU mem 2-cycle handshake, in sync with the core M-stage
-    ) (
-        clk                                                                  ,
-        rst                                                                  ,
-        // Dispatch (in-order push from rename; gated on a non-illegal vec op).
-        i_alloc_en          : rename_fire && dec_op.is_vec && !dec_op.illegal,
-        i_alloc_vec_op      : dec_op.vec_op                                  ,
-        i_alloc_instr       : dec_op.instr                                   ,
-        i_alloc_vd          : dec_op.rd_arch                                 ,
-        i_alloc_vs1         : dec_op.rs1_arch                                ,
-        i_alloc_vs2         : dec_op.rs2_arch                                ,
-        i_alloc_uses_scalar : dec_op.vec_uses_scalar                        ,
-        i_alloc_scalar_pdst : rs1_pdst                                      ,
-        i_alloc_scalar_ready: iq_int_fp_query_rdy                           , // rs1 readiness
-        i_alloc_fscalar_pdst: fp_rs1_pdst                                   , // V3b .vf FP scalar (f[rs1])
-        i_alloc_scalar2_pdst: rs2_pdst                                      , // V5h strided stride (x[rs2])
-        i_alloc_has_rd      : dec_op.has_rd || dec_op.fp_writes_fp          , // scalar rd: int (vmv.x.s/vset) or FP (vfmv.f.s)
-        i_alloc_rd_is_fp    : dec_op.fp_writes_fp                           , // vfmv.f.s → FP dest
-        i_alloc_rd_pdst     : ren_rd_pdst                                   , // FP pdst when fp_writes_fp, else int pdst
-        i_alloc_rob_idx     : rob_alloc_idx                                 ,
-        o_alloc_rdy         : vu_alloc_rdy                                  ,
-        // Int CDB snoop (merged lane 0 + pipe-1) — wakes the scalar operand.
-        i_cdb_int_valid     : cdb.valid && !cdb_dest_is_fp && cdb.has_rd     ,
-        i_cdb_int_pdst      : cdb.pdst                                      ,
-        i_cdb2_valid        : alu_cdb2.valid                                ,
-        i_cdb2_has_rd       : alu_cdb2.has_rd                               ,
-        i_cdb2_pdst         : alu_cdb2.pdst                                 ,
-        // Non-speculative execution gate (FIFO head must be the ROB head).
-        i_rob_head_idx      : rob_head_idx                                  ,
-        // Int PRF scalar read (combinational at execute).
-        o_scalar_pdst       : vu_scalar_pdst                                ,
-        i_scalar_data       : vu_scalar_data                               ,
-        // FP PRF scalar read (V3b .vf ops).
-        o_fscalar_pdst      : vu_fscalar_pdst                              ,
-        i_fscalar_data      : vu_fscalar_data                             ,
-        o_scalar2_pdst      : vu_scalar2_pdst                             , // V5h strided stride
-        i_scalar2_data      : vu_scalar2_data                             ,
-        // VRF interface.
-        o_vs1_addr          : vu_vs1_addr                                   ,
-        i_vs1_data          : vu_vs1_data                                  ,
-        o_vs2_addr          : vu_vs2_addr                                   ,
-        i_vs2_data          : vu_vs2_data                                  ,
-        o_mask_addr         : vu_mask_addr                                  ,
-        i_mask_data         : vu_mask_data                                 ,
-        o_vdold_addr        : vu_vdold_addr                                 ,
-        i_vdold_data        : vu_vdold_data                                 ,
-        o_vd_addr           : vu_vd_addr                                    ,
-        o_vd_wen            : vu_vd_wen                                    ,
-        o_vd_data           : vu_vd_data                                   ,
-        // CDB writeback (lowest priority — only when the scalar pipe is idle).
-        i_cdb_free          : vu_cdb_free                                   ,
-        o_cdb_valid         : vu_cdb_valid                                  ,
-        o_cdb_has_rd        : vu_cdb_has_rd                                 ,
-        o_cdb_pdst          : vu_cdb_pdst                                   ,
-        o_cdb_data          : vu_cdb_data                                   ,
-        o_cdb_rob_idx       : vu_cdb_rob_idx                                ,
-        o_cdb_vset_wen      : vu_cdb_vset_wen                               ,
-        o_cdb_vtype         : vu_cdb_vtype                                  ,
-        o_cdb_vl            : vu_cdb_vl                                     ,
-        // V1 unit-stride memory port.
-        o_mem_port_req      : vu_mem_port_req                               ,
-        o_mem_active        : vu_mem_active                                 ,
-        o_mem_vaddr         : vu_mem_vaddr                                  ,
-        o_mem_is_load       : vu_mem_is_load                               ,
-        o_mem_is_store      : vu_mem_is_store                             ,
-        o_mem_funct3        : vu_mem_funct3                                ,
-        o_mem_wdata         : vu_mem_wdata                                 ,
-        o_mem_wstrb         : vu_mem_wstrb                                 ,
-        i_mem_idle          : vu_mem_idle                                  ,
-        i_mem_ready         : vu_mem_ready                                 ,
-        i_mem_rdata         : dcache_rdata                                 ,
-        i_mem_fault         : vu_mem_fault                                 ,
-        i_mem_fault_st      : vu_mem_fault_st                              ,
-        i_csr_vstart        : csr_vstart                                   ,
-        o_cdb_is_lfault     : vu_cdb_is_lfault                            ,
-        o_cdb_is_sfault     : vu_cdb_is_sfault                            ,
-        o_cdb_fault_vaddr   : vu_cdb_fault_vaddr                          ,
-        o_cdb_vstart_wen    : vu_cdb_vstart_wen                           ,
-        o_cdb_vstart        : vu_cdb_vstart                               ,
-        o_cdb_vstore        : vu_cdb_vstore                               ,
-        // V3 vector FP: rounding mode in (fcsr.frm), accrued fflags out.
-        i_frm               : csr_frm                                       ,
-        // V5b fixed-point rounding mode (vxrm) for averaging / scaling / clip.
-        i_vxrm              : csr_vxrm                                       ,
-        o_cdb_fflags        : vu_cdb_fflags                                ,
-        o_cdb_fflags_wen    : vu_cdb_fflags_wen                            ,
-        // V5a fixed-point saturation accrual (OR'd into vxsat at commit).
-        o_cdb_vxsat         : vu_cdb_vxsat                                 ,
-        o_cdb_vxsat_wen     : vu_cdb_vxsat_wen                             ,
-        o_cdb_fp_dest       : vu_cdb_fp_dest                               ,
-        // Architectural vtype/vl restore on flush.
-        i_csr_vtype         : csr_vtype                                     ,
-        i_csr_vl            : csr_vl                                        ,
-        i_flush             : redirect_fire                                 ,
-        i_squash_en         : s8_restore_en                                 ,
-        i_squash_idx        : s8_restore_idx                                ,
-    );
+    if VEC_EN :g_vu {
+        inst u_vrf: vrf #(
+            VRF_N: vector_pkg::VRF_N,
+            VRF_W: vector_pkg::VRF_W,
+            VLEN : vector_pkg::VLEN ,
+        ) (
+            clk                    ,
+            rst                    ,
+            i_rd1_addr: vu_vs1_addr,
+            o_rd1_data: vu_vs1_data,
+            i_rd2_addr: vu_vs2_addr,
+            o_rd2_data: vu_vs2_data,
+            i_rd3_addr: vu_mask_addr,
+            o_rd3_data: vu_mask_data,
+            i_rd4_addr: vu_vdold_addr,
+            o_rd4_data: vu_vdold_data,
+            i_wr_en   : vu_vd_wen  ,
+            i_wr_addr : vu_vd_addr ,
+            i_wr_data : vu_vd_data ,
+        );
+        inst u_vu: vector_unit #(
+            VRF_W    : vector_pkg::VRF_W,
+            VLEN     : vector_pkg::VLEN ,
+            PRF_W    : PRF_INT_W        ,
+            ROB_IDX_W: ROB_IDX_W        ,
+            MEM_PIPE : MEM_PIPE         , // CP M2: VU mem 2-cycle handshake, in sync with the core M-stage
+        ) (
+            clk                                                                  ,
+            rst                                                                  ,
+            // Dispatch (in-order push from rename; gated on a non-illegal vec op).
+            i_alloc_en          : rename_fire && dec_op.is_vec && !dec_op.illegal,
+            i_alloc_vec_op      : dec_op.vec_op                                  ,
+            i_alloc_instr       : dec_op.instr                                   ,
+            i_alloc_vd          : dec_op.rd_arch                                 ,
+            i_alloc_vs1         : dec_op.rs1_arch                                ,
+            i_alloc_vs2         : dec_op.rs2_arch                                ,
+            i_alloc_uses_scalar : dec_op.vec_uses_scalar                        ,
+            i_alloc_scalar_pdst : rs1_pdst                                      ,
+            i_alloc_scalar_ready: iq_int_fp_query_rdy                           , // rs1 readiness
+            i_alloc_fscalar_pdst: fp_rs1_pdst                                   , // V3b .vf FP scalar (f[rs1])
+            i_alloc_scalar2_pdst: rs2_pdst                                      , // V5h strided stride (x[rs2])
+            i_alloc_has_rd      : dec_op.has_rd || dec_op.fp_writes_fp          , // scalar rd: int (vmv.x.s/vset) or FP (vfmv.f.s)
+            i_alloc_rd_is_fp    : dec_op.fp_writes_fp                           , // vfmv.f.s → FP dest
+            i_alloc_rd_pdst     : ren_rd_pdst                                   , // FP pdst when fp_writes_fp, else int pdst
+            i_alloc_rob_idx     : rob_alloc_idx                                 ,
+            o_alloc_rdy         : vu_alloc_rdy                                  ,
+            // Int CDB snoop (merged lane 0 + pipe-1) — wakes the scalar operand.
+            i_cdb_int_valid     : cdb.valid && !cdb_dest_is_fp && cdb.has_rd     ,
+            i_cdb_int_pdst      : cdb.pdst                                      ,
+            i_cdb2_valid        : alu_cdb2.valid                                ,
+            i_cdb2_has_rd       : alu_cdb2.has_rd                               ,
+            i_cdb2_pdst         : alu_cdb2.pdst                                 ,
+            // Non-speculative execution gate (FIFO head must be the ROB head).
+            i_rob_head_idx      : rob_head_idx                                  ,
+            // Int PRF scalar read (combinational at execute).
+            o_scalar_pdst       : vu_scalar_pdst                                ,
+            i_scalar_data       : vu_scalar_data                               ,
+            // FP PRF scalar read (V3b .vf ops).
+            o_fscalar_pdst      : vu_fscalar_pdst                              ,
+            i_fscalar_data      : vu_fscalar_data                             ,
+            o_scalar2_pdst      : vu_scalar2_pdst                             , // V5h strided stride
+            i_scalar2_data      : vu_scalar2_data                             ,
+            // VRF interface.
+            o_vs1_addr          : vu_vs1_addr                                   ,
+            i_vs1_data          : vu_vs1_data                                  ,
+            o_vs2_addr          : vu_vs2_addr                                   ,
+            i_vs2_data          : vu_vs2_data                                  ,
+            o_mask_addr         : vu_mask_addr                                  ,
+            i_mask_data         : vu_mask_data                                 ,
+            o_vdold_addr        : vu_vdold_addr                                 ,
+            i_vdold_data        : vu_vdold_data                                 ,
+            o_vd_addr           : vu_vd_addr                                    ,
+            o_vd_wen            : vu_vd_wen                                    ,
+            o_vd_data           : vu_vd_data                                   ,
+            // CDB writeback (lowest priority — only when the scalar pipe is idle).
+            i_cdb_free          : vu_cdb_free                                   ,
+            o_cdb_valid         : vu_cdb_valid                                  ,
+            o_cdb_has_rd        : vu_cdb_has_rd                                 ,
+            o_cdb_pdst          : vu_cdb_pdst                                   ,
+            o_cdb_data          : vu_cdb_data                                   ,
+            o_cdb_rob_idx       : vu_cdb_rob_idx                                ,
+            o_cdb_vset_wen      : vu_cdb_vset_wen                               ,
+            o_cdb_vtype         : vu_cdb_vtype                                  ,
+            o_cdb_vl            : vu_cdb_vl                                     ,
+            // V1 unit-stride memory port.
+            o_mem_port_req      : vu_mem_port_req                               ,
+            o_mem_active        : vu_mem_active                                 ,
+            o_mem_vaddr         : vu_mem_vaddr                                  ,
+            o_mem_is_load       : vu_mem_is_load                               ,
+            o_mem_is_store      : vu_mem_is_store                             ,
+            o_mem_funct3        : vu_mem_funct3                                ,
+            o_mem_wdata         : vu_mem_wdata                                 ,
+            o_mem_wstrb         : vu_mem_wstrb                                 ,
+            i_mem_idle          : vu_mem_idle                                  ,
+            i_mem_ready         : vu_mem_ready                                 ,
+            i_mem_rdata         : dcache_rdata                                 ,
+            i_mem_fault         : vu_mem_fault                                 ,
+            i_mem_fault_st      : vu_mem_fault_st                              ,
+            i_csr_vstart        : csr_vstart                                   ,
+            o_cdb_is_lfault     : vu_cdb_is_lfault                            ,
+            o_cdb_is_sfault     : vu_cdb_is_sfault                            ,
+            o_cdb_fault_vaddr   : vu_cdb_fault_vaddr                          ,
+            o_cdb_vstart_wen    : vu_cdb_vstart_wen                           ,
+            o_cdb_vstart        : vu_cdb_vstart                               ,
+            o_cdb_vstore        : vu_cdb_vstore                               ,
+            // V3 vector FP: rounding mode in (fcsr.frm), accrued fflags out.
+            i_frm               : csr_frm                                       ,
+            // V5b fixed-point rounding mode (vxrm) for averaging / scaling / clip.
+            i_vxrm              : csr_vxrm                                       ,
+            o_cdb_fflags        : vu_cdb_fflags                                ,
+            o_cdb_fflags_wen    : vu_cdb_fflags_wen                            ,
+            // V5a fixed-point saturation accrual (OR'd into vxsat at commit).
+            o_cdb_vxsat         : vu_cdb_vxsat                                 ,
+            o_cdb_vxsat_wen     : vu_cdb_vxsat_wen                             ,
+            o_cdb_fp_dest       : vu_cdb_fp_dest                               ,
+            // Architectural vtype/vl restore on flush.
+            i_csr_vtype         : csr_vtype                                     ,
+            i_csr_vl            : csr_vl                                        ,
+            i_flush             : redirect_fire                                 ,
+            i_squash_en         : s8_restore_en                                 ,
+            i_squash_idx        : s8_restore_idx                                ,
+        );
+    } else :g_novu {
+        // No vector unit. Decode makes every vector instruction illegal,
+        // so nothing uses these. All zero means scalar-only operation.
+        assign vu_vs1_data        = '0;
+        assign vu_vs2_data        = '0;
+        assign vu_mask_data       = '0;
+        assign vu_vdold_data      = '0;
+        assign vu_alloc_rdy       = '0;
+        assign vu_scalar_pdst     = '0;
+        assign vu_fscalar_pdst    = '0;
+        assign vu_scalar2_pdst    = '0;
+        assign vu_vs1_addr        = '0;
+        assign vu_vs2_addr        = '0;
+        assign vu_mask_addr       = '0;
+        assign vu_vdold_addr      = '0;
+        assign vu_vd_addr         = '0;
+        assign vu_vd_wen          = '0;
+        assign vu_vd_data         = '0;
+        assign vu_cdb_valid       = '0;
+        assign vu_cdb_has_rd      = '0;
+        assign vu_cdb_pdst        = '0;
+        assign vu_cdb_data        = '0;
+        assign vu_cdb_rob_idx     = '0;
+        assign vu_cdb_vset_wen    = '0;
+        assign vu_cdb_vtype       = '0;
+        assign vu_cdb_vl          = '0;
+        assign vu_mem_port_req    = '0;
+        assign vu_mem_active      = '0;
+        assign vu_mem_vaddr       = '0;
+        assign vu_mem_is_load     = '0;
+        assign vu_mem_is_store    = '0;
+        assign vu_mem_funct3      = '0;
+        assign vu_mem_wdata       = '0;
+        assign vu_mem_wstrb       = '0;
+        assign vu_cdb_is_lfault   = '0;
+        assign vu_cdb_is_sfault   = '0;
+        assign vu_cdb_fault_vaddr = '0;
+        assign vu_cdb_vstart_wen  = '0;
+        assign vu_cdb_vstart      = '0;
+        assign vu_cdb_vstore      = '0;
+        assign vu_cdb_fflags      = '0;
+        assign vu_cdb_fflags_wen  = '0;
+        assign vu_cdb_vxsat       = '0;
+        assign vu_cdb_vxsat_wen   = '0;
+        assign vu_cdb_fp_dest     = '0;
+    }
 
     // ---- VU memory-port arbitration signals (V1) ----------------------------
     // The VU owns the dmem port (highest priority) while a vle/vse streams. The
@@ -4751,6 +4808,7 @@ pub module heliodor_core #(
     var hpm_events: logic<8>;
     inst u_csr: csr #(
         HART_ID: HART_ID,
+        VEC_EN : VEC_EN ,
     ) (
         clk                         ,
         rst                         ,

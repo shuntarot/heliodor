@@ -112,9 +112,15 @@ pub module ibtb #(
         } else {
             if i_train_en {
                 valid[i_train_index] = 1'b1;
-                d0[i_train_index]    = tr_word; // both copies written identically
-                d1[i_train_index]    = tr_word;
             }
+        }
+    }
+    // The data copies are written here, in a block with no reset.
+    // Vivado makes RAM only from arrays that no reset block writes.
+    always_ff (clk) {
+        if i_train_en {
+            d0[i_train_index] = tr_word; // both copies written identically
+            d1[i_train_index] = tr_word;
         }
     }
 }

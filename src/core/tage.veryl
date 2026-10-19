@@ -223,16 +223,10 @@ pub module tage #(
         if_reset {
             for i in 0..ENTRIES {
                 t1_v[i]   = 1'b0;
-                t1_tag[i] = '0;
-                t1_ctr[i] = 2'b01;
                 t1_u[i]   = 1'b0;
                 t2_v[i]   = 1'b0;
-                t2_tag[i] = '0;
-                t2_ctr[i] = 2'b01;
                 t2_u[i]   = 1'b0;
                 t3_v[i]   = 1'b0;
-                t3_tag[i] = '0;
-                t3_ctr[i] = 2'b01;
                 t3_u[i]   = 1'b0;
             }
             lfsr      = 8'ha5;
@@ -260,17 +254,14 @@ pub module tage #(
             // Provider update: counter toward the outcome; useful tracks
             // whether the provider beat the altpred when they disagreed.
             if tr_prov == 2'd3 {
-                t3_ctr[tr3_idx] = if i_train_taken ? (if t3_ctr[tr3_idx] == 2'b11 ? 2'b11 : t3_ctr[tr3_idx] + 2'd1) : (if t3_ctr[tr3_idx] == 2'b00 ? 2'b00 : t3_ctr[tr3_idx] - 2'd1);
                 if tr_prov_pred != tr_alt_pred {
                     t3_u[tr3_idx] = tr_prov_pred == i_train_taken;
                 }
             } else if tr_prov == 2'd2 {
-                t2_ctr[tr2_idx] = if i_train_taken ? (if t2_ctr[tr2_idx] == 2'b11 ? 2'b11 : t2_ctr[tr2_idx] + 2'd1) : (if t2_ctr[tr2_idx] == 2'b00 ? 2'b00 : t2_ctr[tr2_idx] - 2'd1);
                 if tr_prov_pred != tr_alt_pred {
                     t2_u[tr2_idx] = tr_prov_pred == i_train_taken;
                 }
             } else if tr_prov == 2'd1 {
-                t1_ctr[tr1_idx] = if i_train_taken ? (if t1_ctr[tr1_idx] == 2'b11 ? 2'b11 : t1_ctr[tr1_idx] + 2'd1) : (if t1_ctr[tr1_idx] == 2'b00 ? 2'b00 : t1_ctr[tr1_idx] - 2'd1);
                 if tr_prov_pred != tr_alt_pred {
                     t1_u[tr1_idx] = tr_prov_pred == i_train_taken;
                 }
@@ -282,18 +273,12 @@ pub module tage #(
             if i_train_mispred {
                 if alloc1 {
                     t1_v[tr1_idx]   = 1'b1;
-                    t1_tag[tr1_idx] = tr1_tag;
-                    t1_ctr[tr1_idx] = alloc_ctr;
                     t1_u[tr1_idx]   = 1'b0;
                 } else if alloc2 {
                     t2_v[tr2_idx]   = 1'b1;
-                    t2_tag[tr2_idx] = tr2_tag;
-                    t2_ctr[tr2_idx] = alloc_ctr;
                     t2_u[tr2_idx]   = 1'b0;
                 } else if alloc3 {
                     t3_v[tr3_idx]   = 1'b1;
-                    t3_tag[tr3_idx] = tr3_tag;
-                    t3_ctr[tr3_idx] = alloc_ctr;
                     t3_u[tr3_idx]   = 1'b0;
                 } else if alloc_none && tr_prov != 2'd3 {
                     if tr_prov == 2'd0 {
@@ -303,6 +288,36 @@ pub module tage #(
                         t2_u[tr2_idx] = 1'b0;
                     }
                     t3_u[tr3_idx] = 1'b0;
+                }
+            }
+        }
+    }
+
+    // Tags and counters are written here, in a block with no reset.
+    // Vivado makes RAM only from arrays that no reset block writes.
+    // They need no reset: every read that matters is gated by `t*_v`.
+    // (`o_taken` is used only with `o_hit`.)
+    // A new entry writes both before it sets `t*_v`.
+    // The valid and useful bits stay in the reset block above.
+    always_ff (clk) {
+        if i_train_en {
+            if tr_prov == 2'd3 {
+                t3_ctr[tr3_idx] = if i_train_taken ? (if t3_ctr[tr3_idx] == 2'b11 ? 2'b11 : t3_ctr[tr3_idx] + 2'd1) : (if t3_ctr[tr3_idx] == 2'b00 ? 2'b00 : t3_ctr[tr3_idx] - 2'd1);
+            } else if tr_prov == 2'd2 {
+                t2_ctr[tr2_idx] = if i_train_taken ? (if t2_ctr[tr2_idx] == 2'b11 ? 2'b11 : t2_ctr[tr2_idx] + 2'd1) : (if t2_ctr[tr2_idx] == 2'b00 ? 2'b00 : t2_ctr[tr2_idx] - 2'd1);
+            } else if tr_prov == 2'd1 {
+                t1_ctr[tr1_idx] = if i_train_taken ? (if t1_ctr[tr1_idx] == 2'b11 ? 2'b11 : t1_ctr[tr1_idx] + 2'd1) : (if t1_ctr[tr1_idx] == 2'b00 ? 2'b00 : t1_ctr[tr1_idx] - 2'd1);
+            }
+            if i_train_mispred {
+                if alloc1 {
+                    t1_tag[tr1_idx] = tr1_tag;
+                    t1_ctr[tr1_idx] = alloc_ctr;
+                } else if alloc2 {
+                    t2_tag[tr2_idx] = tr2_tag;
+                    t2_ctr[tr2_idx] = alloc_ctr;
+                } else if alloc3 {
+                    t3_tag[tr3_idx] = tr3_tag;
+                    t3_ctr[tr3_idx] = alloc_ctr;
                 }
             }
         }

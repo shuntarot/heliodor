@@ -5,7 +5,9 @@
 // (LOAD/STORE/CSR/AMO/FENCE/SFENCE/FP/SYS) is flagged illegal=1 so
 // the ROB can take a precise trap. M3+/M4+/M5+ progressively un-illegal
 // these classes.
-pub module decode (
+pub module decode #(
+    param VEC_EN: bit = 1, // 0: vector instructions are illegal
+) (
     i_pc    : input  logic                     <64>,
     i_instr : input  logic                     <32>,
     i_is_rvc: input  logic                         , // M7
@@ -54,7 +56,9 @@ pub module decode (
     var vec_uses_scalar: logic              ;
     var vec_writes_int : logic              ;
 
-    inst u_dec: decoder (
+    inst u_dec: decoder #(
+        VEC_EN: VEC_EN,
+    ) (
         i_instr      : i_instr   ,
         o_alu_op     : alu_op    ,
         o_alu_src_a  : alu_src_a ,

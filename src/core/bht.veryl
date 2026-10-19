@@ -73,12 +73,13 @@ pub module bht #(
     assign o_taken2 = if BHT_SYNC_READ ? o_taken2_q : o_taken2_raw;
     assign o_taken3 = if BHT_SYNC_READ ? o_taken3_q : o_taken3_raw;
 
-    always_ff (clk, rst) {
-        if_reset {
-            // ctr left un-reset (infers as SRAM). Cold entries read as the array's
-            // power-up value rather than the old weakly-taken 2'b10 bias; a cold
-            // misprediction self-corrects, so this is a perf-only cold start.
-        } else if i_train_en {
+    // ctr left un-reset (infers as SRAM). Cold entries read as the array's
+    // power-up value rather than the old weakly-taken 2'b10 bias; a cold
+    // misprediction self-corrects, so this is a perf-only cold start.
+    // This block has no reset, not even an empty one.
+    // Vivado makes RAM only from arrays that no reset block writes.
+    always_ff (clk) {
+        if i_train_en {
             // Read the old counter from the RMW copy, saturate, write every copy.
             let old: logic<2> = ctr_d[i_train_index];
             let nw : logic<2> = if i_train_taken ? (if old == 2'b11 ? 2'b11 : old + 2'd1) : (if old == 2'b00 ? 2'b00 : old - 2'd1);

@@ -527,36 +527,21 @@ pub module icache #(
                 // buf[addr[5:3]] = dword fill_count). The retention read (data_k[f_blk] & ~msk)
                 // folds into the SRAM 64-bit write-enable — 1 write port.
                 if i_mem_grant {
-                    if fill_way == 2'd0 {
-                        data_0[f_blk] = (data_0[f_blk] & ~fill_dmsk) | (fill_dnew & fill_dmsk);
-                    }
-                    if fill_way == 2'd1 {
-                        data_1[f_blk] = (data_1[f_blk] & ~fill_dmsk) | (fill_dnew & fill_dmsk);
-                    }
-                    if fill_way == 2'd2 {
-                        data_2[f_blk] = (data_2[f_blk] & ~fill_dmsk) | (fill_dnew & fill_dmsk);
-                    }
-                    if fill_way == 2'd3 {
-                        data_3[f_blk] = (data_3[f_blk] & ~fill_dmsk) | (fill_dnew & fill_dmsk);
-                    }
+                    // Data and tag writes are in the block below.
                     if fill_count == 3'd7 {
                         // Fill complete: update tag, and set valid unless a FENCE.I
                         // hit the fill (this cycle or earlier) — then leave invalid.
                         let fin_valid: logic = !fill_aborted && !i_flush;
                         if fill_way == 2'd0 {
-                            tags_0[fill_index]  = fill_tag;
                             valid_0[fill_index] = fin_valid;
                         }
                         if fill_way == 2'd1 {
-                            tags_1[fill_index]  = fill_tag;
                             valid_1[fill_index] = fin_valid;
                         }
                         if fill_way == 2'd2 {
-                            tags_2[fill_index]  = fill_tag;
                             valid_2[fill_index] = fin_valid;
                         }
                         if fill_way == 2'd3 {
-                            tags_3[fill_index]  = fill_tag;
                             valid_3[fill_index] = fin_valid;
                         }
                         filling      = 1'b0;
@@ -589,16 +574,55 @@ pub module icache #(
                     pf_pending = 1'b0;
                 }
             }
-        }
 
-        // S11.2 tail-hit trigger: queue a prefetch while fetch streams through
-        // the tail of a cached line whose successor is absent. Runs after the
-        // FSM arms (sequential semantics): a same-cycle fill-completion chain
-        // queues fill_line+1 first, then this overwrites with the line the
-        // fetch stream actually demands — the fresher candidate wins.
-        if s11_pf_en && pf_tail_trig {
-            pf_pending = 1'b1;
-            pf_line    = nl_line;
+            // S11.2 tail-hit trigger: queue a prefetch while fetch streams through
+            // the tail of a cached line whose successor is absent. Runs after the
+            // FSM arms (sequential semantics): a same-cycle fill-completion chain
+            // queues fill_line+1 first, then this overwrites with the line the
+            // fetch stream actually demands — the fresher candidate wins.
+            if s11_pf_en && pf_tail_trig {
+                pf_pending = 1'b1;
+                pf_line    = nl_line;
+            }
+        }
+    }
+
+    // Data, tags and PLRU are written here, in a block with no reset.
+    // Vivado makes RAM only from arrays that no reset block writes.
+    // None of them needs a reset: `valid_*` gates every hit.
+    always_ff (clk) {
+        if filling && i_mem_grant {
+            // Grant-gated dword beat: masked slot-write of dword fill_count into block
+            // f_blk = {fill_index, fill_count[2]}, slot fill_count[1:0] (mem_ctrl streams
+            // buf[addr[5:3]] = dword fill_count). The retention read (data_k[f_blk] & ~msk)
+            // folds into the SRAM 64-bit write-enable — 1 write port.
+            if fill_way == 2'd0 {
+                data_0[f_blk] = (data_0[f_blk] & ~fill_dmsk) | (fill_dnew & fill_dmsk);
+            }
+            if fill_way == 2'd1 {
+                data_1[f_blk] = (data_1[f_blk] & ~fill_dmsk) | (fill_dnew & fill_dmsk);
+            }
+            if fill_way == 2'd2 {
+                data_2[f_blk] = (data_2[f_blk] & ~fill_dmsk) | (fill_dnew & fill_dmsk);
+            }
+            if fill_way == 2'd3 {
+                data_3[f_blk] = (data_3[f_blk] & ~fill_dmsk) | (fill_dnew & fill_dmsk);
+            }
+            // Fill done: write the tag of the new line.
+            if fill_count == 3'd7 {
+                if fill_way == 2'd0 {
+                    tags_0[fill_index] = fill_tag;
+                }
+                if fill_way == 2'd1 {
+                    tags_1[fill_index] = fill_tag;
+                }
+                if fill_way == 2'd2 {
+                    tags_2[fill_index] = fill_tag;
+                }
+                if fill_way == 2'd3 {
+                    tags_3[fill_index] = fill_tag;
+                }
+            }
         }
 
         // Update PLRU on cache hit (point tree AWAY from accessed way).
