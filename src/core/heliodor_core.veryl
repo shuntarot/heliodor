@@ -4683,17 +4683,18 @@ pub module heliodor_core #(
             satp_shadow  = 64'd0;
             vsatp_shadow = 64'd0;
         } else if commit_csrw_satp {
-            // satp_shadow keeps csr_satp (the OLD value — the register update is
-            // NBA); the V=0 narrow-IFU hack + the following sfence re-sync make this
-            // work. Phase 11-H5.2b: vsatp_shadow instead takes c_csr_wdata (the
-            // value being WRITTEN this cycle, == what the vsatp register receives),
-            // so the guest's two-stage MMU sees the new vsatp immediately after the
-            // implicit csrw-satp redirect. relocate_enable_mmu does two back-to-back
-            // `csrw satp` with no sfence between, so a one-behind vsatp_shadow walked
-            // the trampoline pgd after the swapper switch and hung. The
-            // inject_fake_ifault path drops the vsatp REGISTER write (trap wins over
-            // write), but c_csr_wdata still carries the intended value here.
-            satp_shadow  = csr_satp;
+            // Both shadows take c_csr_wdata (the value being WRITTEN this cycle),
+            // so the MMU sees the new satp/vsatp right after the implicit
+            // csrw-satp redirect. The inject_fake_ifault path drops the REGISTER
+            // write (trap wins over write), but c_csr_wdata still carries the
+            // intended value here. Phase 11-H5.2b did this for vsatp: with a
+            // one-behind vsatp_shadow, relocate_enable_mmu's two back-to-back
+            // `csrw satp` walked the trampoline pgd after the swapper switch and
+            // hung. satp_shadow used to keep csr_satp (the OLD value, 0 at the
+            // first enable): the fetch at the high-half stvec then ran in Bare
+            // mode and only worked where the instruction port aliases the
+            // high-half VA onto DRAM (the tb's imem does; an FPGA top need not).
+            satp_shadow  = c_csr_wdata;
             vsatp_shadow = c_csr_wdata;
         } else if commit_sfence_pulse {
             satp_shadow  = csr_satp;
