@@ -1204,7 +1204,8 @@ pub module rob #(
                 sh_is_lfault[tail_idx]   = 1'b0;
                 sh_is_sfault[tail_idx]   = 1'b0;
                 sh_fault_acc[tail_idx]   = i_alloc_entry.fault_acc;
-                sh_fault_vaddr[tail_idx] = 64'd0;
+                // An instruction fault carries its faulting VA from fetch.
+                sh_fault_vaddr[tail_idx] = if i_alloc_entry.is_ifault ? i_alloc_entry.fault_vaddr : 64'd0;
                 // Phase 11-H3d: an instruction guest-page-fault carries its
                 // gstage/gpa from fetch (i_alloc_entry); a load fault overwrites
                 // these later via the inject port. Non-fault allocs pass 0.
@@ -1351,7 +1352,10 @@ pub module rob #(
                     sh_is_lfault[i_cdb_rob_idx]   = i_cdb_is_lfault;
                     sh_is_sfault[i_cdb_rob_idx]   = i_cdb_is_sfault;
                     sh_fault_acc[i_cdb_rob_idx]   = i_cdb_fault_acc;
-                    sh_fault_vaddr[i_cdb_rob_idx] = i_cdb_fault_vaddr;
+                    // An instruction fault keeps its own (alloc-set) faulting VA.
+                    if !sh_is_ifault[i_cdb_rob_idx] {
+                        sh_fault_vaddr[i_cdb_rob_idx] = i_cdb_fault_vaddr;
+                    }
                     sh_is_store[i_cdb_rob_idx]    = 1'b0;
                     sh_has_rd[i_cdb_rob_idx]      = 1'b0;
                     entries[i_cdb_rob_idx].has_rd = 1'b0;
@@ -1496,7 +1500,9 @@ pub module rob #(
                 sh_is_lfault[i_lfault_inj_rob]           = !i_lfault_inj_is_amo;
                 sh_is_sfault[i_lfault_inj_rob]           = i_lfault_inj_is_amo;
                 sh_fault_acc[i_lfault_inj_rob]           = i_lfault_inj_acc;
-                sh_fault_vaddr[i_lfault_inj_rob]         = i_lfault_inj_vaddr;
+                if !sh_is_ifault[i_lfault_inj_rob] {
+                    sh_fault_vaddr[i_lfault_inj_rob] = i_lfault_inj_vaddr;
+                }
                 // Phase 11-H3d: a wrong-path load walk's fault can be injected into
                 // a reused/innocent entry (M9.3 inject-linkage hazard). If that
                 // entry is an instruction fault, its is_ifault masks the spurious

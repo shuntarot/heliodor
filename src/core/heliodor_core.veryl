@@ -436,6 +436,7 @@ pub module heliodor_core #(
     // Phase 11-H3d: per-entry G-stage-fault flag + faulting guest PA for an
     // instruction guest-page-fault. Latched with fb_ifault at push.
     var fb_ifault_gstage: logic    [FB_DEPTH];
+    var fb_ifault_hi    : logic    [FB_DEPTH]; // the fault is at the high half (pc + 2)
     var fb_ifault_gpa   : logic<64>[FB_DEPTH];
     var fb_head : logic<3>; // read pointer (oldest, = IF/ID head)
     var fb_tail : logic<3>; // write pointer (next push slot)
@@ -959,10 +960,22 @@ pub module heliodor_core #(
     let ext_head_avail: logic     = ext_head_match || ext_bypass;
     // Fault bits: at =1 from the FIFO head entry (or the bypassed arriving push); at =0 the live
     // imem_mmu outputs. A faulting dword can be bypassed too (the fault delivers a cycle earlier).
-    let ic_ifault : logic     = if ICACHE_SYNC_READ ? (if ext_bypass ? wf_push_ifault_q : (ext_head_match && wf_ifault[wf_head])) : imem_fault_w;
-    let ic_iacc   : logic     = if ICACHE_SYNC_READ ? (if ext_bypass ? wf_push_iacc_q   : (ext_head_match && wf_iacc[wf_head]))   : imem_acc_fault_w;
-    let ic_gstage : logic     = if ICACHE_SYNC_READ ? (if ext_bypass ? wf_push_gstage_q : (ext_head_match && wf_gstage[wf_head])) : imem_gstage_w;
-    let ic_gpa    : logic<64> = if ICACHE_SYNC_READ ? (if ext_bypass ? wf_push_gpa_q : wf_gpa[wf_head]) : imem_gpa_w;
+    let ic_ifault_lo: logic     = if ICACHE_SYNC_READ ? (if ext_bypass ? wf_push_ifault_q : (ext_head_match && wf_ifault[wf_head])) : imem_fault_w;
+    let ic_iacc_lo  : logic     = if ICACHE_SYNC_READ ? (if ext_bypass ? wf_push_iacc_q   : (ext_head_match && wf_iacc[wf_head]))   : imem_acc_fault_w;
+    let ic_gstage_lo: logic     = if ICACHE_SYNC_READ ? (if ext_bypass ? wf_push_gstage_q : (ext_head_match && wf_gstage[wf_head])) : imem_gstage_w;
+    let ic_gpa_lo   : logic<64> = if ICACHE_SYNC_READ ? (if ext_bypass ? wf_push_gpa_q : wf_gpa[wf_head]) : imem_gpa_w;
+    // A 32-bit instruction at offset 6 of the head dword takes its high half
+    // from the next FIFO entry. If that entry faulted (the next page is not
+    // mapped), the instruction faults there: the fault is at its high half,
+    // and the high half's bytes are not to be used. Without this the
+    // straddle assembled the faulted entry's zeros as a valid instruction.
+    let ic_hi_check : logic = ICACHE_SYNC_READ && ext_head_match && needs_straddle && ext_pc_q[2] && ext_next_valid;
+    let ic_hi_fault : logic = ic_hi_check && (wf_ifault[wf_head + 3'd1] || wf_iacc[wf_head + 3'd1]);
+    let ic_fault_hi : logic = ic_hi_fault && !ic_ifault_lo && !ic_iacc_lo;
+    let ic_ifault   : logic     = ic_ifault_lo || (ic_fault_hi && wf_ifault[wf_head + 3'd1]);
+    let ic_iacc     : logic     = ic_iacc_lo || (ic_fault_hi && !wf_ifault[wf_head + 3'd1]);
+    let ic_gstage   : logic     = if ic_fault_hi ? wf_gstage[wf_head + 3'd1] : ic_gstage_lo;
+    let ic_gpa      : logic<64> = if ic_fault_hi ? wf_gpa[wf_head + 3'd1] : ic_gpa_lo;
     // Deliver: =1 gates on the FIFO head OR the §19 bypass (a fault entry delivers regardless of
     // straddle); =0 keeps the old combinational-fetch readiness.
     let fetch_ready: logic = if ICACHE_SYNC_READ ?
@@ -1683,6 +1696,7 @@ pub module heliodor_core #(
                 fb_ifault[fb_tail]       = ic_ifault;
                 fb_iacc[fb_tail]         = ic_iacc;
                 fb_ifault_gstage[fb_tail] = ic_gstage;
+                fb_ifault_hi[fb_tail]    = ic_fault_hi;
                 fb_ifault_gpa[fb_tail]   = ic_gpa;
                 fb_pred_next_pc[fb_tail] = pred_next_pc_bp;
                 fb_pred_index[fb_tail]   = bht_lk_index;
@@ -1698,6 +1712,7 @@ pub module heliodor_core #(
                 fb_ifault[fb_tail1]       = 1'b0;
                 fb_iacc[fb_tail1]         = 1'b0; // slot-1 same page as slot-0 → no PMP fault
                 fb_ifault_gstage[fb_tail1] = 1'b0; // slot-1 never faults (same page as slot-0)
+                fb_ifault_hi[fb_tail1]    = 1'b0;
                 fb_ifault_gpa[fb_tail1]   = 64'd0;
                 fb_pred_next_pc[fb_tail1] = pred_next_pc1;
                 fb_pred_index[fb_tail1]   = bht_lk_index1;
@@ -1768,6 +1783,7 @@ pub module heliodor_core #(
     assign if_iacc_q       = if FETCH_REG ? fb_iacc[fb_head] : if fb_count != 4'd0 ? fb_iacc[fb_head] : ic_iacc;
     // Phase 11-H3d: the gstage/gpa travelling with if_ifault_q (same mux).
     let if_ifault_gstage_q: logic     = if FETCH_REG ? fb_ifault_gstage[fb_head] : if fb_count != 4'd0 ? fb_ifault_gstage[fb_head] : ic_gstage;
+    let if_ifault_hi_q    : logic     = if FETCH_REG ? fb_ifault_hi[fb_head] : if fb_count != 4'd0 ? fb_ifault_hi[fb_head] : ic_fault_hi;
     let if_ifault_gpa_q   : logic<64> = if FETCH_REG ? fb_ifault_gpa[fb_head] : if fb_count != 4'd0 ? fb_ifault_gpa[fb_head] : ic_gpa;
 
     // Phase 8 S4b: slot-1 (head+1) FIFO read for the 2nd decode/rename lane.
@@ -2471,6 +2487,9 @@ pub module heliodor_core #(
         // Phase 11-H3d: carry the fetch G-stage-fault flag + guest PA for an
         // instruction guest-page-fault (cause 20 + htval). 0 unless V=1 fetch.
         rob_alloc_entry.ifault_gstage  = if_ifault_gstage_q;
+        // The VA that faulted (stval): the high half of a straddling instruction
+        // when that is where the fault is, else the instruction's own pc.
+        rob_alloc_entry.fault_vaddr    = if if_ifault_hi_q ? if_pc_q + 64'd2 : if_pc_q;
         rob_alloc_entry.ifault_gpa     = if_ifault_gpa_q;
         rob_alloc_entry.result_data    = 64'd0;
         // M5.B: mark stores (and AMO*/SC which commit-store) at alloc so
@@ -4851,7 +4870,7 @@ pub module heliodor_core #(
         i_trap_tval: if inject_fake_ifault ?
             c_pc + 64'd4
         : if c_is_ifault ?
-            c_pc
+            c_fault_vaddr
         : if c_is_lfault ?
             c_fault_vaddr
         : if commit_store_sfault ?
