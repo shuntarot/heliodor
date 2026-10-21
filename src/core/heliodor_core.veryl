@@ -2240,6 +2240,7 @@ pub module heliodor_core #(
     var m_unc_q      : logic    ; // = dc_uncached && !lsr_capture
     var m_lnext_q    : logic    ; // = dc_load_next && !dc_uncached && !lsr_capture
     var m_wen_q      : logic    ; // = dc_i_wen (effective write-enable, pre-dcache)
+    var m_wen_held_q : logic    ; // = dc_wen_held: last cycle's slow-store write was held back
     var m_wstrb_q    : logic<8> ; // = dmu_dmem_wstrb
     var m_wstrbhi_q  : logic<8> ; // = dc_st_wstrb_hi (misaligned-store hi invalidate)
     var m_wdata_q    : logic<64>; // = dmu_dmem_wdata
@@ -4123,6 +4124,12 @@ pub module heliodor_core #(
         // M3b: AMO/SC commits write LIVE (amo_commit_live) and retire single-cycle, so
         // they are excluded (!c_is_amo) from this translate-cycle hold.
         && !(MEM_PIPE && c_is_store && !sb_elig && !c_is_amo && !store_fetched_q)
+        // The ordering hold below (sb_st_ovl / !sb_empty) gates dc_i_wen, and the
+        // write reaches the dcache one cycle later through m_wen_q. When the hold
+        // clears, retiring in that same cycle drops the store: its write would
+        // arrive after the store has left. So wait one more cycle after a held
+        // write, until m_wen_q carries it.
+        && !(MEM_PIPE && c_is_store && !sb_elig && !c_is_amo && m_wen_held_q)
         && !(c_is_store && !sb_elig && (dcache_stall || (if c_is_amo || c_store_mmio ? !sb_empty : sb_st_ovl)))
         && !(c_is_store && sb_elig && sb_full && !sb_merge_ok)
         && !(c_serial && !sb_empty)
@@ -7365,6 +7372,8 @@ pub module heliodor_core #(
     // cycle and is instead SB-pushed (from the registered m_pa_q) on its retire cycle.
     // At STORE_PRETRANSLATE=0 sb_vm_live_ok ≡ sb_vm_ok = byte-identical.
     let dc_i_wen      : logic    = (dmu_dmem_wen && !sb_vm_live_ok && !(if c_is_amo || c_store_mmio_x ? !sb_empty : sb_st_ovl)) || dmu_ad_wb;
+    // The same write, held back this cycle by the store-buffer ordering check.
+    let dc_wen_held   : logic    = dmu_dmem_wen && !sb_vm_live_ok && (if c_is_amo || c_store_mmio_x ? !sb_empty : sb_st_ovl);
     // Phase 12 V1: a VU unit-stride store element is single-dword (no hi-strobe).
     let dc_st_wstrb_hi: logic<8> = if vu_mem_active ? 8'd0 : if dmu_ad_wb ? 8'd0 : if dc_i_wen ? st_wstrb_hi : 8'd0;
     // P9.3: in-cache AMO/SC commit write — eligible when the committing
@@ -7992,6 +8001,7 @@ pub module heliodor_core #(
             m_unc_q      = 1'b0;
             m_lnext_q    = 1'b0;
             m_wen_q      = 1'b0;
+            m_wen_held_q = 1'b0;
             m_wstrb_q    = 8'd0;
             m_wstrbhi_q  = 8'd0;
             m_wdata_q    = 64'd0;
@@ -8014,6 +8024,7 @@ pub module heliodor_core #(
             m_unc_q      = dc_uncached && !lsr_capture;
             m_lnext_q    = dc_load_next && !dc_uncached && !lsr_capture;
             m_wen_q      = dc_i_wen;
+            m_wen_held_q = dc_wen_held;
             m_wstrb_q    = dmu_dmem_wstrb;
             m_wstrbhi_q  = dc_st_wstrb_hi;
             m_wdata_q    = dmu_dmem_wdata;
