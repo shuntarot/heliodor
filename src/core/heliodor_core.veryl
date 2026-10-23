@@ -5693,7 +5693,13 @@ pub module heliodor_core #(
     // wedged the RVWMO litmus battery (bare-metal, no paging). Gating on
     // dmem_vm_on_op makes this complementary to the bare u_pmp_sc_issue check and
     // keeps every bare-mode SC byte-identical (boot's bare phase + all litmus).
-    let issue_sc_walk   : logic = issue_is_sc && !issue_addr_match && !iss_amo_misalign && dmem_vm_on_op;
+    // A MATCHED SC drives the walk too. Its commit write uses ac_pa_q, which is latched
+    // from dmu_dmem_addr at issue, and the MMU only translates while a read or write is
+    // driven. Without the walk ac_pa_q was the untranslated VA, so the SC wrote a
+    // VA-tagged cache line and the store never reached the real PA; when that line was
+    // evicted the writeback address lost its upper bits and hit another DRAM address.
+    // The riscv-tests v environment maps VA == PA, which hid it. Linux does not.
+    let issue_sc_walk   : logic = issue_is_sc && !iss_amo_misalign && dmem_vm_on_op;
     // M9.4 SMP: an SC may consume (clear) the reservation only if BOTH (a) it is
     // program-order AFTER its owner LR (age = distance from the ROB head), so an
     // OoO-reordered OLDER sc.w cannot wipe a YOUNGER lr.w's reservation, AND (b) its
