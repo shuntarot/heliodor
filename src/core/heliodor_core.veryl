@@ -2259,6 +2259,7 @@ pub module heliodor_core #(
     var m_wen_held_q : logic    ; // = dc_wen_held: last cycle's slow-store write was held back
     var m_wstrb_q    : logic<8> ; // = dmu_dmem_wstrb
     var m_wstrbhi_q  : logic<8> ; // = dc_st_wstrb_hi (misaligned-store hi invalidate)
+    var m_misal_q    : logic    ; // = st_wstrb_hi != 0: the store crosses a dword (kept even while its write is held)
     var m_wdata_q    : logic<64>; // = dmu_dmem_wdata
     var m_amo_read_q : logic    ; // = dc_amo_read
     var m_wen_excl_q : logic    ; // = dc_wen_excl
@@ -6130,11 +6131,14 @@ pub module heliodor_core #(
     // (m_fault_q: a faulting held store traps from the registered fault, never pushes).
     let m_pa_cacheable: logic = (m_pa_q[63:25] == 39'h40)
         && !((m_pa_q[31:14] == 18'h20000) || (m_pa_q[31:12] == 20'h80008));
-    // A MISALIGNED held store (m_wstrbhi_q != 0) must NOT SB-push — it needs the M-stage
-    // 2-line write/invalidate (dc_i_wen path), so exclude it here (else it would both
-    // SB-push and M-stage-write the same store). Aligned cacheable held stores have
-    // dc_i_wen=0 (sb_vm_live_ok=1) → dc_st_wstrb_hi=0 → m_wstrbhi_q=0.
-    let sb_2cyc_ok: logic = STORE_PRETRANSLATE && store_fetched_q && m_pa_cacheable && !m_fault_q && (m_wstrbhi_q == 8'd0);
+    // A MISALIGNED held store must NOT SB-push — it needs the M-stage 2-line
+    // write/invalidate (dc_i_wen path), so exclude it here (else it would both SB-push and
+    // M-stage-write the same store). m_wstrbhi_q cannot tell: dc_st_wstrb_hi is gated by
+    // dc_i_wen, and a misaligned store whose write is held by the store-buffer ordering
+    // check has dc_i_wen=0, so m_wstrbhi_q is 0 for it too. It then SB-pushed only its low
+    // bytes and lost the part past the dword (half a string written by a misaligned memcpy).
+    // m_misal_q is registered from st_wstrb_hi without that gate.
+    let sb_2cyc_ok: logic = STORE_PRETRANSLATE && store_fetched_q && m_pa_cacheable && !m_fault_q && !m_misal_q;
     // R1 (store-queue / decoupled-retire, first CP-moving piece — the §8 "const/physical
     // separation" the runtime-mux atomic-PA decouple could not deliver). SB_PA_REG=1
     // DELETES the last live-TLB consumer on the retire gate: c_store_eff_pa (= sb_pa)'s
@@ -8029,6 +8033,7 @@ pub module heliodor_core #(
             m_wen_held_q = 1'b0;
             m_wstrb_q    = 8'd0;
             m_wstrbhi_q  = 8'd0;
+            m_misal_q    = 1'b0;
             m_wdata_q    = 64'd0;
             m_amo_read_q = 1'b0;
             m_wen_excl_q = 1'b0;
@@ -8052,6 +8057,7 @@ pub module heliodor_core #(
             m_wen_held_q = dc_wen_held;
             m_wstrb_q    = dmu_dmem_wstrb;
             m_wstrbhi_q  = dc_st_wstrb_hi;
+            m_misal_q    = st_wstrb_hi != 8'd0;
             m_wdata_q    = dmu_dmem_wdata;
             m_amo_read_q = dc_amo_read;
             m_wen_excl_q = dc_wen_excl;
