@@ -3,3 +3,4 @@
 # retiring stores), pass/fail on both cores.
 # Format: <suite>/<name> [budget=<cycles>] [hex=<path>] [tohost=<word index>]
 mem/mem2 budget=200000 hex=test/directed/mem2.hex
+mem/ma_sweep budget=6000000 hex=test/directed/ma_sweep.hex
