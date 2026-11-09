@@ -1,0 +1,32 @@
+// l2_data_ram: one bank of the L2 data array, in the shape FPGA synthesis maps
+// to block RAM: one write port with a byte enable, one synchronous read port,
+// and no reset. A read in the same cycle as a write to the same line returns
+// the line from before the write, as the flop array it replaces did.
+pub module l2_data_ram #(
+    param INDEX_W: u32 = 9 ,
+    param BYTES  : u32 = 64,
+) (
+    clk    : input  clock               ,
+    i_we   : input  logic               ,
+    i_widx : input  logic<INDEX_W>      ,
+    i_wbe  : input  logic<BYTES>        ,
+    i_wdata: input  logic<BYTES * 8>    ,
+    i_ridx : input  logic<INDEX_W>      ,
+    o_rdata: output logic<BYTES * 8>    ,
+) {
+    var mem: logic<BYTES * 8> [1 << INDEX_W];
+
+    always_ff (clk) {
+        if i_we {
+            for j in 0..BYTES {
+                if i_wbe[j] {
+                    mem[i_widx][j * 8+:8] = i_wdata[j * 8+:8];
+                }
+            }
+        }
+    }
+
+    always_ff (clk) {
+        o_rdata = mem[i_ridx];
+    }
+}

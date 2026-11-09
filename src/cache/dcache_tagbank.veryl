@@ -38,22 +38,20 @@ pub module dcache_tagbank #(
     var tags_2: logic<TAG_W> [SETS];
     var tags_3: logic<TAG_W> [SETS];
 
-    always_ff {
-        if_reset {
-            // tags intentionally unreset (valid flop gates them); benign missing_reset.
-        } else {
-            if i_t_we_0 {
-                tags_0[i_t_idx_0] = i_t_val_0;
-            }
-            if i_t_we_1 {
-                tags_1[i_t_idx_1] = i_t_val_1;
-            }
-            if i_t_we_2 {
-                tags_2[i_t_idx_2] = i_t_val_2;
-            }
-            if i_t_we_3 {
-                tags_3[i_t_idx_3] = i_t_val_3;
-            }
+    // No reset in this block: FPGA synthesis maps an array to RAM only when its
+    // writes are outside an asynchronously reset block.
+    always_ff (clk) {
+        if i_t_we_0 {
+            tags_0[i_t_idx_0] = i_t_val_0;
+        }
+        if i_t_we_1 {
+            tags_1[i_t_idx_1] = i_t_val_1;
+        }
+        if i_t_we_2 {
+            tags_2[i_t_idx_2] = i_t_val_2;
+        }
+        if i_t_we_3 {
+            tags_3[i_t_idx_3] = i_t_val_3;
         }
     }
 

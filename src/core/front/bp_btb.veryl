@@ -225,17 +225,17 @@ pub module bp_btb::<CFG: core_cfg> (
             tagv[u_idx] = tag_of(u.start_pc);
         }
         for k in 0..BP_SLOTS {
-            if (alloc && k == 0 && x_br) || (need_slot && victim[k]) {
+            // One write statement per array: FPGA synthesis maps an array to
+            // RAM only when it has a single write port.
+            let s_new: logic = (alloc && k == 0 && x_br) || (need_slot && victim[k]);
+            if s_new {
                 s_off[k][u_idx] = u.res.exit_foff;
-                s_ctr[k][u_idx] = 2'd2;
+            }
+            if s_new || (!alloc && ctr_we[k]) {
+                s_ctr[k][u_idx] = if s_new ? 2'd2 : new_c[k];
+            }
+            if s_new || (!alloc && tgt_we[k]) {
                 s_tgt[k][u_idx] = u.res.target;
-            } else if !alloc {
-                if ctr_we[k] {
-                    s_ctr[k][u_idx] = new_c[k];
-                }
-                if tgt_we[k] {
-                    s_tgt[k][u_idx] = u.res.target;
-                }
             }
         }
         if x_jmp {
